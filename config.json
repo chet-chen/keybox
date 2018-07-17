@@ -1,0 +1,9 @@
+{
+  "keys": [
+    "key1",
+    "key2",
+    "key3"
+  ],
+  "output": "./",
+  "package": "com.ourslook.keybox"
+}
