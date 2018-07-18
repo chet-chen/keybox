@@ -1,9 +1,9 @@
 {
+  "signature_sha1": "80:7A:9F:38:F8:FE:1F:82:1F:CF:A2:7E:9A:33:45:4B:18:83:C0:A5",
   "keys": [
-    "key1",
-    "key2",
-    "key3"
+    "mdi1f84h60gj68e3hdkgt74gg13``》《《《《*&&*****./,..,y",
+    "DES_KEY_PASSWORD"
   ],
   "output": "./",
-  "package": "com.ourslook.keybox"
+  "package": "com.ourslook.guower.util"
 }

@@ -4,11 +4,8 @@ import random
 import string
 
 
-def xor(text, key):
-    result = ''
-    for i in range(len(text)):
-        result += chr(ord(text[i]) ^ ord(key[i]))
-    return result
+def xor(src, key):
+    return (hex(src[i] ^ key[i]) for i in range(len(src)))
 
 
 if __name__ == '__main__':
@@ -24,32 +21,164 @@ if __name__ == '__main__':
     keyboxJava = open(package_path + '/Keybox.java', 'w')
     keyboxJava.write(f"""package {package};
     
-    import android.content.Context;
-    
-    public class Keybox {{
-    
-        private static String[] keys;
-    
-        public static String[] getKeys(Context context) {{
-            if (keys == null) {{
-                keys = getKeysJNI(context);
-            }}
-            return keys;
+import android.content.Context;
+
+public class Keybox {{
+
+    static {{
+        System.loadLibrary("key-box");
+    }}
+
+    private static String[] keys;
+
+    public static String[] getKeys(Context context) {{
+        if (keys == null) {{
+            keys = getKeysJNI(context);
         }}
-        
-        private static native String[] getKeysJNI(Context context);
-    }}""")
+        return keys;
+    }}
+    
+    private static native String[] getKeysJNI(Context context);
+}}""")
     keyboxJava.close()
 
     # 生成 keybox.c 文件
+    signature_sha1 = config['signature_sha1']
+    signature_sha1_bs = bytes(signature_sha1, 'utf-8')
     keys = config['keys']
-    maxLen = max(len(key) for key in keys)
+    keys_bs = [bytes(key, 'utf-8') for key in keys]
+    maxLen = max(max(len(key) for key in keys_bs), len(signature_sha1_bs))
     seed = string.digits + string.ascii_letters + string.punctuation
-    xor_k = ''.join(random.choice(seed) for i in range(maxLen))
-    xor_keys = [xor(key, xor_k) for key in keys]
+    xor_key_bs = bytes(''.join(random.choice(seed) for i in range(maxLen)), 'utf-8')
     keyboxC = open(output + 'keybox.c', 'w')
-    keyboxC.write(f"""#include <stdio.h>
-    
-char keys[] = {{{','.join(('"'+k+'"' for k in xor_keys))}}};
-    """)
+    keyboxC.write(f"""#include <jni.h>
+#include <string.h>
+
+static const u_int8_t SIGNATURE[] = {{
+        {','.join(xor(signature_sha1_bs,xor_key_bs))}
+}};
+
+static const u_int8_t KEYS[{len(keys_bs)}][{max(len(key) for key in keys_bs)}] = {{
+        {','.join('{'+','.join(xor(key, xor_key_bs))+'}' for key in keys_bs)}
+}};
+
+static const u_int8_t XOR_KEY[] = {{
+        {','.join(hex(i) for i in xor_key_bs)}
+}};
+
+// 获取数组的大小
+# define len(x) ((int) (sizeof(x) / sizeof((x)[0])))
+
+static u_int8_t *xor(const u_int8_t *data, u_int8_t *result, int len) {{
+    for (int i = 0; i < len; i++) {{
+        result[i] = data[i] ^ XOR_KEY[i];
+    }}
+    return result;
+}}
+
+static char *hexEncode(JNIEnv *env, jbyteArray array, char *chs) {{
+    if (array != NULL) {{
+        jsize len = (*env)->GetArrayLength(env, array);
+        if (len > 0) {{
+            jboolean b = JNI_FALSE;
+            jbyte *data = (*env)->GetByteArrayElements(env, array, &b);
+            int index;
+            for (index = 0; index < len; index++) {{
+                jbyte bc = data[index];
+                jbyte h = (jbyte) ((bc >> 4) & 0x0f);
+                jbyte l = (jbyte) (bc & 0x0f);
+                jchar ch;
+                jchar cl;
+
+                if (h > 9) {{
+                    ch = (jchar) ('A' + (h - 10));
+                }} else {{
+                    ch = (jchar) ('0' + h);
+                }}
+
+                if (l > 9) {{
+                    cl = (jchar) ('A' + (l - 10));
+                }} else {{
+                    cl = (jchar) ('0' + l);
+                }}
+                chs[index * 3] = (char) ch;
+                chs[index * 3 + 1] = (char) cl;
+                chs[index * 3 + 2] = ':';
+            }}
+            chs[len * 3 - 1] = 0;
+            (*env)->ReleaseByteArrayElements(env, array, data, JNI_ABORT);
+            return chs;
+        }}
+    }}
+    return NULL;
+}}
+
+static int check_signature(JNIEnv *env, jobject context) {{
+    jclass context_clazz = (*env)->GetObjectClass(env, context);
+    jmethodID methodID_getPackageManager = (*env)->GetMethodID(env,
+                                                               context_clazz, "getPackageManager",
+                                                               "()Landroid/content/pm/PackageManager;");
+    jobject packageManager = (*env)->CallObjectMethod(env, context,
+                                                      methodID_getPackageManager);
+    jclass pm_clazz = (*env)->GetObjectClass(env, packageManager);
+    jmethodID methodID_pm = (*env)->GetMethodID(env, pm_clazz, "getPackageInfo",
+                                                "(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;");
+    jmethodID methodID_pack = (*env)->GetMethodID(env, context_clazz,
+                                                  "getPackageName", "()Ljava/lang/String;");
+    jstring application_package = (*env)->CallObjectMethod(env, context,
+                                                           methodID_pack);
+    jobject packageInfo = (*env)->CallObjectMethod(env, packageManager,
+                                                   methodID_pm, application_package, 64);
+    jclass packageinfo_clazz = (*env)->GetObjectClass(env, packageInfo);
+    jfieldID fieldID_signatures = (*env)->GetFieldID(env, packageinfo_clazz,
+                                                     "signatures",
+                                                     "[Landroid/content/pm/Signature;");
+    jobjectArray signature_arr = (jobjectArray) (*env)->GetObjectField(env,
+                                                                       packageInfo,
+                                                                       fieldID_signatures);
+    jobject signature = (*env)->GetObjectArrayElement(env, signature_arr, 0);
+    jclass signature_clazz = (*env)->GetObjectClass(env, signature);
+    jmethodID methodID_toByteArray = (*env)->GetMethodID(env, signature_clazz, "toByteArray",
+                                                         "()[B");
+    jbyteArray signature_byte = (jbyteArray) (*env)->CallObjectMethod(env, signature,
+                                                                      methodID_toByteArray);
+    jclass message_digest_class = (*env)->FindClass(env, "java/security/MessageDigest");
+    jmethodID methodID_getInstance = (*env)->GetStaticMethodID(env, message_digest_class,
+                                                               "getInstance",
+                                                               "(Ljava/lang/String;)Ljava/security/MessageDigest;");
+    jstring sha1_jstring = (*env)->NewStringUTF(env, "SHA1");
+    jobject sha1_digest = (*env)->CallStaticObjectMethod(env, message_digest_class,
+                                                         methodID_getInstance,
+                                                         sha1_jstring);
+    jmethodID methodId_digest = (*env)->GetMethodID(env, message_digest_class, "digest", "([B)[B");
+    jbyteArray sha1_byte = (jbyteArray) (*env)->CallObjectMethod(env, sha1_digest, methodId_digest,
+                                                                 signature_byte);
+    jsize len = (*env)->GetArrayLength(env, sha1_byte);
+    char chs[len * 3];
+    char *signature_sha1 = hexEncode(env, sha1_byte, chs);
+
+    int SIGNATURE_len = len(SIGNATURE);
+    u_int8_t result[SIGNATURE_len];
+    xor(SIGNATURE, result, SIGNATURE_len);
+    return strcmp((const char *) result, signature_sha1);
+}}
+
+JNIEXPORT jobjectArray JNICALL
+Java_{package.replace('.','_')}_Keybox_getKeysJNI(JNIEnv *env, jclass type, jobject context) {{
+    if (check_signature(env, context)) {{
+        jobjectArray keys = (*env)->NewObjectArray(env, len(KEYS),
+                                                   (*env)->FindClass(env, "java/lang/String"),
+                                                   (*env)->NewStringUTF(env, NULL));
+        for (int i = 0; i < len(KEYS); i++) {{
+            int KEY_len = len(KEYS[i]);
+            u_int8_t result[KEY_len];
+            xor(KEYS[i], result, KEY_len);
+            (*env)->SetObjectArrayElement(env, keys, i,
+                                          (*env)->NewStringUTF(env, (const char *) result));
+        }}
+        return keys;
+    }} else {{
+        return NULL;
+    }}
+}};""")
     keyboxC.close()
