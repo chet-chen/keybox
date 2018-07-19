@@ -54,25 +54,27 @@ public class Keybox {{
     keyboxC.write(f"""#include <jni.h>
 #include <string.h>
 
-static const u_int8_t SIGNATURE[] = {{
+static const char SIGNATURE[{len(signature_sha1_bs)+1}] = {{
         {','.join(xor(signature_sha1_bs,xor_key_bs))}
 }};
 
-static const u_int8_t KEYS[{len(keys_bs)}][{max(len(key) for key in keys_bs)}] = {{
+static const char KEYS[{len(keys_bs)}][{max(len(key) for key in keys_bs)+1}] = {{
         {','.join('{'+','.join(xor(key, xor_key_bs))+'}' for key in keys_bs)}
 }};
 
-static const u_int8_t XOR_KEY[] = {{
+static const int KEYS_LENGTH[] = {{{','.join(str(len(key)+1) for key in keys_bs)}}};
+
+static const char XOR_KEY[{len(xor_key_bs)+1}] = {{
         {','.join(hex(i) for i in xor_key_bs)}
 }};
 
-// 获取数组的大小
 # define len(x) ((int) (sizeof(x) / sizeof((x)[0])))
 
-static u_int8_t *xor(const u_int8_t *data, u_int8_t *result, int len) {{
+static char *xor(const char *data, char *result, int len) {{
     for (int i = 0; i < len; i++) {{
         result[i] = data[i] ^ XOR_KEY[i];
     }}
+    result[len - 1] = 0x0;
     return result;
 }}
 
@@ -105,7 +107,7 @@ static char *hexEncode(JNIEnv *env, jbyteArray array, char *chs) {{
                 chs[index * 3 + 1] = (char) cl;
                 chs[index * 3 + 2] = ':';
             }}
-            chs[len * 3 - 1] = 0;
+            chs[len * 3 - 1] = 0x0;
             (*env)->ReleaseByteArrayElements(env, array, data, JNI_ABORT);
             return chs;
         }}
@@ -158,9 +160,9 @@ static int check_signature(JNIEnv *env, jobject context) {{
     char *signature_sha1 = hexEncode(env, sha1_byte, chs);
 
     int SIGNATURE_len = len(SIGNATURE);
-    u_int8_t result[SIGNATURE_len];
+    char result[SIGNATURE_len];
     xor(SIGNATURE, result, SIGNATURE_len);
-    return strcmp((const char *) result, signature_sha1);
+    return strcmp((const char *) result, signature_sha1) == 0;
 }}
 
 JNIEXPORT jobjectArray JNICALL
@@ -170,8 +172,8 @@ Java_{package.replace('.','_')}_Keybox_getKeysJNI(JNIEnv *env, jclass type, jobj
                                                    (*env)->FindClass(env, "java/lang/String"),
                                                    (*env)->NewStringUTF(env, NULL));
         for (int i = 0; i < len(KEYS); i++) {{
-            int KEY_len = len(KEYS[i]);
-            u_int8_t result[KEY_len];
+            int KEY_len = KEYS_LENGTH[i];
+            char result[KEY_len];
             xor(KEYS[i], result, KEY_len);
             (*env)->SetObjectArrayElement(env, keys, i,
                                           (*env)->NewStringUTF(env, (const char *) result));
